@@ -65,8 +65,8 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         for i in range(level):
             indent += "\t"
 
-        # オブジェクト名書き込み
-        self.write_and_print(file, indent + object.type + " - " + object.name)
+        # オブジェクトのタイプ書き込み
+        self.write_and_print(file, indent + object.type)
         #ローカルトランスフォーム行列から平行移動、回転、スケーリングを抽出
         trans, rot, scale = object.matrix_local.decompose()
         #回転を Quaternion から Euler に変換
@@ -75,10 +75,15 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
         rot.x = math.degrees(rot.x)
         rot.y = math.degrees(rot.y)
         rot.z = math.degrees(rot.z)
-        #トランスフォーム情報を書き込む
-        self.write_and_print(file, indent + "Trans(%f,%f,%f)" % (trans.x, trans.y, trans.z))
-        self.write_and_print(file, indent + "Rot(%f,%f,%f)" % (rot.x, rot.y, rot.z))
-        self.write_and_print(file, indent + "Scale(%f,%f,%f)" % (scale.x, scale.y, scale.z))
+        #トランスフォーム情報を書き込む（半角スペース区切り）
+        self.write_and_print(file, indent + "T %f %f %f" % (trans.x, trans.y, trans.z))
+        self.write_and_print(file, indent + "R %f %f %f" % (rot.x, rot.y, rot.z))
+        self.write_and_print(file, indent + "S %f %f %f" % (scale.x, scale.y, scale.z))
+        #カスタムプロパティ 'file_name'
+        if "file_name" in object:
+            self.write_and_print(file, indent + "N %s" % object["file_name"])
+        #オブジェクトの区切りを明確にする
+        self.write_and_print(file, indent + 'END')
         self.write_and_print(file, '')
 
         # 子ノードへ進む（深さが1上がる）
@@ -118,6 +123,39 @@ class MYADDON_OT_export_scene(bpy.types.Operator, bpy_extras.io_utils.ExportHelp
 
         return {'FINISHED'}
 
+# オペレータ カスタムプロパティ['file_name']追加
+class MYADDON_OT_add_filename(bpy.types.Operator):
+    bl_idname = "myaddon.myaddon_ot_add_filename"
+    bl_label = "FileName 追加"
+    bl_description = "['file_name']カスタムプロパティを追加します"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        # ['file_name']カスタムプロパティを追加
+        context.object["file_name"] = ""
+        print("['file_name']カスタムプロパティを追加しました。")
+        return {'FINISHED'}
+
+# パネル ファイル名
+class OBJECT_PT_file_name(bpy.types.Panel):
+    """オブジェクトのファイルネームパネル"""
+    bl_idname = "OBJECT_PT_file_name"
+    bl_label = "FileName"
+    bl_space_type = "PROPERTIES"
+    bl_region_type = "WINDOW"
+    bl_context = "object"
+
+    # サブメニューの描画
+    def draw(self, context):
+
+        # パネルに項目を追加
+        if "file_name" in context.object:
+            # 既にプロパティがあれば、プロパティを表示
+            self.layout.prop(context.object, '["file_name"]', text=self.bl_label)
+        else:
+            # プロパティがなければ、プロパティ追加ボタンを表示
+            self.layout.operator(MYADDON_OT_add_filename.bl_idname)
+
 #トップバーの拡張メニュー
 class TOPBAR_MT_my_menu(bpy.types.Menu):
     #Blenderがクラスを識別するための固有の文字列
@@ -148,6 +186,8 @@ classes = (
     MYADDON_OT_stretch_vertex,
     TOPBAR_MT_my_menu,
     MYADDON_OT_export_scene,
+    MYADDON_OT_add_filename,
+    OBJECT_PT_file_name,
 )
 
 #Add-On有効化時コールバック
