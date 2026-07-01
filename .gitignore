@@ -1,0 +1,5 @@
+# 授業資料など（管理対象外）
+documents/
+
+# Claude Code の作業用フォルダ
+.claude/
