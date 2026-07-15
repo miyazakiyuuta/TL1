@@ -1,0 +1,70 @@
+#pragma once
+#include "DirectXTex.h"
+#include "base/DirectXCommon.h"
+#include <DirectXPackedVector.h>
+#include <d3d12.h>
+#include <string>
+#include <unordered_map>
+#include <wrl.h>
+
+class SrvManager;
+
+// テクスチャマネージャー
+class TextureManager {
+public:
+	// シングルトンインスタンスの取得
+	static TextureManager* GetInstance();
+	// 終了
+	void Finalize();
+
+	void Initialize(DirectXCommon* dxCommon, SrvManager* srvManager);
+
+	/// <summary>
+	/// テクスチャファイルの読み込み
+	/// </summary>
+	/// <param name="filePath">テクスチャファイルのパス</param>
+	/// <returns>画像イメージデータ</returns>
+	void LoadTexture(const std::string& filePath);
+
+	/// <summary>
+	/// 既に読み込み済みのテクスチャをキャッシュから削除し、ディスクから再読み込みする。
+	/// 同じファイルパスで中身が変わった場合（ランタイム生成テクスチャ等）に使う。
+	/// </summary>
+	void ReloadTexture(const std::string& filePath);
+
+	// メタデータの取得
+	const DirectX::TexMetadata& GetMetaData(const std::string& filePath);
+	// SRVインデックスの取得
+	uint32_t GetSrvIndex(const std::string& filePath);
+	// GPUハンドルの取得
+	D3D12_GPU_DESCRIPTOR_HANDLE GetSrvHandleGPU(const std::string& filePath);
+
+	// デフォルトテクスチャの名前
+	static inline const std::string kDefaultTextureName = "white";
+
+private:
+	// テクスチャ1枚分のデータ
+	struct TextureData {
+		DirectX::TexMetadata metadata;
+		Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+		uint32_t srvIndex;
+		D3D12_CPU_DESCRIPTOR_HANDLE srvHandleCPU;
+		D3D12_GPU_DESCRIPTOR_HANDLE srvHandleGPU;
+	};
+
+	void CreateDefaultTexture();
+
+	static TextureManager* instance;
+
+	TextureManager() = default;
+	~TextureManager() = default;
+	TextureManager(TextureManager&) = delete;
+	TextureManager& operator=(TextureManager&) = delete;
+
+	DirectXCommon* dxCommon_ = nullptr;
+
+	// テクスチャデータ
+	std::unordered_map<std::string, TextureData> textureDatas_;
+
+	SrvManager* srvManager_ = nullptr;
+};
