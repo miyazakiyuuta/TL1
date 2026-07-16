@@ -12,11 +12,11 @@
 #include "effect/GPUParticleEmitter.h"
 #include "3d/Object3d.h"
 #include "3d/Skybox.h"
+#include "stage/Stage.h"
 #include "3d/SkyCylinder.h"
 #include "debug/DebugRenderer.h"
 #include "effect/EffectManager.h"
 #include "effect/DepthBasedOutline.h"
-#include "scene/LevelDataLoader.h"
 
 #include <algorithm>
 #include <numbers>
@@ -29,8 +29,8 @@
 namespace {
 	// シーン配置の保存先(作業ディレクトリ=プロジェクト直下からの相対パス)
 	const std::string kScenePath = "resources/scenes/GamePlayScene.json";
-	// Blenderのレベルエディタから出力したレベルデータ名("resources/scenes/<名前>.json")
-	const std::string kLevelName = "level";
+	// ステージデータの置き場所(「エディタで作ってゲームが読む」パイプラインの受け渡しファイル)
+	const std::string kStagePath = "resources/scenes/stage.json";
 }
 
 void GamePlayScene::Initialize() {
@@ -96,6 +96,11 @@ void GamePlayScene::Initialize() {
 	ModelManager::GetInstance()->LoadModel("human/human_re.gltf");
 	ModelManager::GetInstance()->LoadModel("Frog/Frog.gltf");
 
+	// ステージ配置をstage.jsonから構築(必要なモデルはStage側がロードする)
+	stage_ = std::make_unique<Stage>();
+	stage_->SetCamera(camera_.get());
+	stage_->LoadFromFile(kStagePath);
+
 	object3d_ = std::make_unique<Object3d>();
 	object3d_->Initialize(Object3dCommon::GetInstance());
 	//object3d_->SetModel("human/human_re.gltf");
@@ -119,33 +124,6 @@ void GamePlayScene::Initialize() {
 	skyCylinder_->SetCamera(camera_.get());
 	skyCylinder_->GetTransform().scale = { 50.0f, 20.0f, 50.0f };
 	skyCylinder_->GetTransform().translate = { 0.0f,  -5.0f,  0.0f };
-
-	// Blenderのレベルエディタから出力したレベルデータを読み込む
-	std::unique_ptr<LevelData> levelData = LevelDataLoader::Load(kLevelName);
-
-	// レベルデータからオブジェクトを生成、配置
-	for (const LevelData::ObjectData& objectData : levelData->objects) {
-		// モデル未指定のオブジェクトは配置しない
-		if (objectData.fileName.empty()) {
-			continue;
-		}
-		// ファイル名からモデルを読み込む(読み込み済みならModelManager側でスキップされる)
-		ModelManager::GetInstance()->LoadModel(objectData.fileName);
-
-		// モデルを指定して3Dオブジェクトを生成
-		std::unique_ptr<Object3d> newObject = std::make_unique<Object3d>();
-		newObject->Initialize(Object3dCommon::GetInstance());
-		newObject->SetModel(objectData.fileName);
-		newObject->SetCamera(camera_.get());
-		// 座標
-		newObject->SetTranslate(objectData.translation);
-		// 回転角
-		newObject->SetRotate(objectData.rotation);
-		// スケーリング
-		newObject->SetScale(objectData.scaling);
-		// 配列に登録
-		levelObjects_.push_back(std::move(newObject));
-	}
 
 	// Hierarchy/Inspector/ギズモ/保存読込が共有するオブジェクト一覧。
 	// オブジェクトを追加したらここに1行足すだけで全機能に反映される。
@@ -206,9 +184,7 @@ void GamePlayScene::Update(float deltaTime) {
 	ParticleManager::GetInstance()->SetCamera(activeCamera);
 	GPUParticleManager::GetInstance()->SetCamera(activeCamera);
 	object3d_->SetCamera(activeCamera);
-	for (std::unique_ptr<Object3d>& levelObject : levelObjects_) {
-		levelObject->SetCamera(activeCamera);
-	}
+	stage_->SetCamera(activeCamera);
 	skyCylinder_->SetCamera(activeCamera);
 	if (auto* effect = effectManager_->FindEffect("DepthBasedOutline")) {
 		static_cast<DepthBasedOutline*>(effect)->SetCamera(activeCamera);
@@ -236,11 +212,7 @@ void GamePlayScene::Update(float deltaTime) {
 	}
 
 	object3d_->Update(deltaTime);
-
-	// レベルデータから生成したオブジェクトの更新
-	for (std::unique_ptr<Object3d>& levelObject : levelObjects_) {
-		levelObject->Update(deltaTime);
-	}
+	stage_->Update(deltaTime);
 
 	DebugRenderer::GetInstance()->AddGrid({ 0.0f,0.0f,0.0f }, 10.0f, 20, { 1.0f,1.0f,1.0f,0.5f });
 
@@ -250,12 +222,8 @@ void GamePlayScene::Draw() {
 	//skybox_->Draw(*camera_);
 	skyCylinder_->Draw();
 
+	stage_->Draw();
 	object3d_->Draw();
-
-	// レベルデータから生成したオブジェクトの描画
-	for (std::unique_ptr<Object3d>& levelObject : levelObjects_) {
-		levelObject->Draw();
-	}
 
 	DebugRenderer::GetInstance()->RenderAll(*GetActiveCamera());
 }
