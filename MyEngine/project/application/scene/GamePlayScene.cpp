@@ -22,8 +22,10 @@
 #include <numbers>
 #ifdef USE_IMGUI
 #include <imgui.h>
+#include <filesystem>
 #include "debug/EditorPanels.h"
 #include "debug/TransformGizmo.h"
+#include "math/Matrix4x4.h"
 #endif
 
 namespace {
@@ -125,25 +127,13 @@ void GamePlayScene::Initialize() {
 	skyCylinder_->GetTransform().scale = { 50.0f, 20.0f, 50.0f };
 	skyCylinder_->GetTransform().translate = { 0.0f,  -5.0f,  0.0f };
 
-	// Hierarchy/Inspector/ギズモ/保存読込が共有するオブジェクト一覧。
-	// オブジェクトを追加したらここに1行足すだけで全機能に反映される。
-	// SkyCylinderは全天を覆うため、Cameraは実体が見えないためクリック選択の対象外
-	editorObjects_.clear();
-	editorObjects_.push_back({ "Sphere", &object3d_->GetTransform(), true });
-	editorObjects_.push_back({ "SkyCylinder", &skyCylinder_->GetTransform(), false });
-	editorObjects_.push_back({ "Camera", &camera_->GetTransform(), false });
-	editorObjects_.back().scaleEditable = false; // カメラのscaleはビュー行列を歪ませるため編集させない
-	selectedIndex_ = -1;
-
 #ifdef USE_IMGUI
-	// 型別のInspector追加UI(ImGui呼び出しを含むためDebug構成のみ)
-	editorObjects_.back().drawInspector = [this]() {
-		float fovY = camera_->GetFovY();
-		if (ImGui::DragFloat("FovY", &fovY, 0.01f)) {
-			camera_->SetFovY(fovY);
-		}
-	};
+	// エディタのモデル選択Comboに出す一覧(実行中にファイルを足したらRescanボタンで取り直す)
+	RescanModelFiles();
 #endif
+
+	// Hierarchy/Inspector/ギズモ/保存読込が共有するオブジェクト一覧を構築
+	RebuildEditorObjects();
 
 	// 保存済みのシーン配置があれば復元(無ければ上の初期値のまま)
 	SceneSerializer::Load(kScenePath, BuildSerializeEntries());
@@ -234,6 +224,59 @@ void GamePlayScene::DrawImGui() {
 	// Hierarchy: オブジェクト一覧+選択、シーンファイル操作
 	ImGui::Begin("Hierarchy");
 	EditorPanels::DrawHierarchy(editorObjects_, selectedIndex_);
+
+	// ステージオブジェクトの追加/複製/削除(stage.jsonの管轄分のみ。C++直書きの固定オブジェクトは対象外)
+	ImGui::SeparatorText("Stage Objects");
+	const bool stageObjectSelected = selectedIndex_ >= static_cast<int>(fixedEditorObjectCount_);
+	const size_t stageIndex = stageObjectSelected ? selectedIndex_ - fixedEditorObjectCount_ : 0;
+
+	// Addで使うモデルの選択(Rescanボタンが横に並ぶため、Comboは残り幅の6割に抑える)
+	ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.6f);
+	const char* addModelPreview =
+		modelFiles_.empty() ? "(no models)" : modelFiles_[addModelIndex_].c_str();
+	if (ImGui::BeginCombo("##addModel", addModelPreview)) {
+		for (int i = 0; i < static_cast<int>(modelFiles_.size()); ++i) {
+			if (ImGui::Selectable(modelFiles_[i].c_str(), addModelIndex_ == i)) {
+				addModelIndex_ = i;
+			}
+		}
+		ImGui::EndCombo();
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Rescan")) {
+		RescanModelFiles();
+	}
+
+	ImGui::BeginDisabled(modelFiles_.empty());
+	if (ImGui::Button("Add")) {
+		StageData::ObjectData objectData;
+		objectData.model = modelFiles_[addModelIndex_];
+		// 名前はモデルファイル名から拡張子を除いたものを既定にする("fence/fence.obj" → "fence")
+		objectData.name = std::filesystem::path(objectData.model).stem().string();
+		// 今見ている場所に出るよう、アクティブカメラの前方に生成する
+		const Transform& cameraTransform = GetActiveCamera()->GetTransform();
+		Vector3 forward = Matrix4x4::Rotate(cameraTransform.rotate).Transform({ 0.0f, 0.0f, 1.0f });
+		objectData.transform.translate = cameraTransform.translate + forward * 10.0f;
+
+		size_t newIndex = stage_->AddObject(std::move(objectData));
+		RebuildEditorObjects();
+		selectedIndex_ = static_cast<int>(fixedEditorObjectCount_ + newIndex);
+	}
+	ImGui::EndDisabled();
+	ImGui::SameLine();
+	ImGui::BeginDisabled(!stageObjectSelected);
+	if (ImGui::Button("Duplicate")) {
+		size_t newIndex = stage_->DuplicateObject(stageIndex);
+		RebuildEditorObjects();
+		selectedIndex_ = static_cast<int>(fixedEditorObjectCount_ + newIndex);
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Delete")) {
+		stage_->RemoveObject(stageIndex);
+		RebuildEditorObjects(); // 選択解除もここで行われる
+	}
+	ImGui::EndDisabled();
+
 	ImGui::SeparatorText("Scene File");
 	if (ImGui::Button("Save")) {
 		SceneSerializer::Save(kScenePath, BuildSerializeEntries());
@@ -265,18 +308,87 @@ void GamePlayScene::DrawImGui() {
 }
 
 std::vector<SceneSerializer::Entry> GamePlayScene::BuildSerializeEntries() const {
-	// エディタ一覧がそのまま保存対象(一覧が唯一の定義箇所になる)
+	// 固定オブジェクトだけが保存対象。ステージ分はstage.jsonの管轄なのでここには含めない
 	std::vector<SceneSerializer::Entry> entries;
-	entries.reserve(editorObjects_.size());
-	for (const EditorObject& object : editorObjects_) {
-		entries.push_back({ object.name, object.transform });
+	entries.reserve(fixedEditorObjectCount_);
+	for (size_t i = 0; i < fixedEditorObjectCount_; ++i) {
+		entries.push_back({ editorObjects_[i].name, editorObjects_[i].transform });
 	}
 	return entries;
+}
+
+void GamePlayScene::RebuildEditorObjects() {
+	// C++直書きの固定オブジェクト。追加したらここに1行足すだけで全機能に反映される。
+	// SkyCylinderは全天を覆うため、Cameraは実体が見えないためクリック選択の対象外
+	editorObjects_.clear();
+	editorObjects_.push_back({ "Sphere", &object3d_->GetTransform(), true });
+	editorObjects_.push_back({ "SkyCylinder", &skyCylinder_->GetTransform(), false });
+	editorObjects_.push_back({ "Camera", &camera_->GetTransform(), false });
+	editorObjects_.back().scaleEditable = false; // カメラのscaleはビュー行列を歪ませるため編集させない
+
+#ifdef USE_IMGUI
+	// 型別のInspector追加UI(ImGui呼び出しを含むためDebug構成のみ)
+	editorObjects_.back().drawInspector = [this]() {
+		float fovY = camera_->GetFovY();
+		if (ImGui::DragFloat("FovY", &fovY, 0.01f)) {
+			camera_->SetFovY(fovY);
+		}
+	};
+#endif
+	fixedEditorObjectCount_ = editorObjects_.size();
+
+	// ステージ分を後ろへ連結(transformはStageData直指し。編集はStage::Updateが実体へ反映する)
+	std::vector<EditorObject> stageObjects = stage_->BuildEditorObjects();
+	editorObjects_.insert(editorObjects_.end(),
+		std::make_move_iterator(stageObjects.begin()), std::make_move_iterator(stageObjects.end()));
+
+#ifdef USE_IMGUI
+	// ステージ分にはモデル差し替えComboを付ける(StageはImGui非依存のまま、UIは登録側=シーンが持つ)。
+	// モデル差し替えは構造変更ではないためこの一覧は作り直し不要で、選択もそのまま維持される
+	for (size_t i = fixedEditorObjectCount_; i < editorObjects_.size(); ++i) {
+		const size_t stageObjectIndex = i - fixedEditorObjectCount_;
+		editorObjects_[i].drawInspector = [this, stageObjectIndex]() {
+			// 参照ではなくコピーで持つ(SetObjectModelが元の文字列を書き換えるため)
+			const std::string current = stage_->GetData().objects[stageObjectIndex].model;
+			if (ImGui::BeginCombo("Model", current.c_str())) {
+				for (const std::string& file : modelFiles_) {
+					if (ImGui::Selectable(file.c_str(), file == current) && file != current) {
+						stage_->SetObjectModel(stageObjectIndex, file);
+					}
+				}
+				ImGui::EndCombo();
+			}
+		};
+	}
+#endif
+
+	// 一覧が変わったので選択は解除(古いindexは別物を指しうる)
+	selectedIndex_ = -1;
 }
 
 Camera* GamePlayScene::GetActiveCamera() const {
 	return debugCamera_->IsActive() ? debugCamera_->GetCamera() : camera_.get();
 }
+
+#ifdef USE_IMGUI
+void GamePlayScene::RescanModelFiles() {
+	// 再スキャンで一覧の並びが変わっても同じモデルを指し続けるよう、選択はindexではなくパスで引き継ぐ
+	std::string selectedPath = "sphere.obj"; // 初回の既定
+	if (addModelIndex_ >= 0 && addModelIndex_ < static_cast<int>(modelFiles_.size())) {
+		selectedPath = modelFiles_[addModelIndex_];
+	}
+
+	modelFiles_ = ModelManager::GetInstance()->ScanModelFiles();
+
+	addModelIndex_ = 0;
+	for (int i = 0; i < static_cast<int>(modelFiles_.size()); ++i) {
+		if (modelFiles_[i] == selectedPath) {
+			addModelIndex_ = i;
+			break;
+		}
+	}
+}
+#endif
 
 GamePlayScene::GamePlayScene() = default;
 
