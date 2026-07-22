@@ -1,6 +1,7 @@
 #pragma once
 #include "stage/StageData.h"
 #include "scene/EditorObject.h"
+#include "math/CatmullRomSpline.h"
 
 #include <memory>
 #include <string>
@@ -53,6 +54,13 @@ public:
 	/// </summary>
 	void SetObjectModel(size_t index, const std::string& model);
 
+	/// <summary>
+	/// index番のオブジェクトの無効フラグを切り替える(trueで実体を破棄、falseで再生成)。
+	/// SetObjectModelと同じく構造変更ではないため、一覧の作り直しは不要。
+	/// ただしEditorObjectのdisabled/pickableの表示状態は呼び出し側が更新すること
+	/// </summary>
+	void SetObjectDisabled(size_t index, bool disabled);
+
 	void Update(float deltaTime);
 	void Draw();
 
@@ -69,6 +77,10 @@ public:
 	StageData& GetData() { return data_; }
 	const StageData& GetData() const { return data_; }
 
+	// レール曲線。距離→位置/接線の評価はCatmullRomSpline自身が持つ(レールカメラ等はこれを直接使う)。
+	// data_.railを書き換えたらRebuild()を呼ぶまで反映されない点に注意
+	const CatmullRomSpline& GetRail() const { return rail_; }
+
 	Stage();
 	~Stage();
 
@@ -77,6 +89,8 @@ private:
 	std::string MakeUniqueName(const std::string& base) const;
 
 	StageData data_;
+	// data_.railから構築したレール曲線(Rebuildで再構築される)
+	CatmullRomSpline rail_;
 	Camera* camera_ = nullptr;
 	// data_.objectsと同じ並びのランタイム実体(disabledの要素はnullptr。indexで対応が取れる)
 	std::vector<std::unique_ptr<Object3d>> objects_;

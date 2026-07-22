@@ -44,6 +44,10 @@ void Stage::Rebuild() {
 		}
 		objects_.push_back(std::move(object));
 	}
+
+	// レール曲線も「データ→実体」の一部としてここで再構築する。
+	// Reload(ファイル読み+Rebuild)や将来のPlay in Editor(Capture+Rebuild)でも自動で追従する
+	rail_.SetControlPoints(data_.rail);
 }
 
 void Stage::Update(float deltaTime) {
@@ -94,6 +98,15 @@ void Stage::SetObjectModel(size_t index, const std::string& model) {
 	Rebuild();
 }
 
+void Stage::SetObjectDisabled(size_t index, bool disabled) {
+	if (data_.objects[index].disabled == disabled) {
+		return;
+	}
+	data_.objects[index].disabled = disabled;
+	// 実体の生成/破棄はRebuildに集約する(有効化時のモデルロードや遅延削除も既存経路に乗る)
+	Rebuild();
+}
+
 std::string Stage::MakeUniqueName(const std::string& base) const {
 	auto exists = [this](const std::string& name) {
 		for (const StageData::ObjectData& objectData : data_.objects) {
@@ -125,6 +138,7 @@ std::vector<EditorObject> Stage::BuildEditorObjects() {
 		editorObject.transform = &objectData.transform;
 		// disabledは実体が無く画面に見えないため、クリック選択の対象外(Hierarchyからは選べる)
 		editorObject.pickable = !objectData.disabled;
+		editorObject.disabled = objectData.disabled;
 		editorObjects.push_back(std::move(editorObject));
 	}
 	return editorObjects;
